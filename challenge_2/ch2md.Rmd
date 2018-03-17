@@ -1,0 +1,98 @@
+---
+title: "Spanish translation on website: A/B testing"
+header-includes:
+   - \setlength\parindent{24pt}
+   - \usepackage{threeparttable}
+linestretch: 2
+fontsize: 11 pt 
+geometry: margin = 0.5in
+output:
+  html_document:
+    df_print: paged
+---
+<br>
+
+#### Problem Statement
+
+Company XYZ is a worldwide e-commerce site with localized versions of the site. 
+A data scientist at XYZ noticed that Spain-based users have a much higher conversion rate than any other Spanish-speaking country. She therefore went and talked to the international team in charge of Spain And LatAm to see if they had any ideas about why that was happening. 
+Spain and LatAm country manager suggested that one reason could be translation. All Spanish- speaking countries had the same translation of the site which was written by a Spaniard. They agreed to try a test where each country would have its one translation written by a local. That is, Argentinian users would see a translation written by an Argentinian, Mexican users by a Mexican and so on. Obviously, nothing would change for users from Spain. 
+After they run the test however, they are really surprised cause the test is negative. I.e., it appears that the non-localized translation was doing better! 
+Project is to: 
+Confirm that the test is actually negative. That is, it appears that the old version of the site with just one translation across Spain and LatAm performs better 
+Explain why that might be happening. Are the localized translations really worse? 
+
+<!--
+Localized Spanish translation introduced in e-commerce site for Spanish speaking countries other than Spain. Test run was found negative - non localized version did better. Confirm the test was actually negative. 
+-->
+
+#### Solution
+
+Broadly, I will 1) t-test for entire sample - all countries. 2) t- test for each country.
+<br>
+```{r}
+library(data.table)
+test_table <- fread("~/Downloads/take_home_challenge/challenge_2/Translation_Test/test_table.csv")
+# the user's country information is in user_table
+user_table <- fread("~/Downloads/take_home_challenge/challenge_2/Translation_Test/user_table.csv")
+```
+
+```{r}
+# join test_table with user_table on user_id
+conversion <- merge(test_table, user_table, by = "user_id", all.x = T)
+
+# check if Spain is ever in test
+conversion[country == "Spain" & test == 1, .N] 
+
+length(unique(conversion$user_id)) == dim(conversion)[1]
+#[1] TRUE so all ids are unique, each person appears just once
+```
+
+t - test for all countries taken together gives the following.
+
+```{r}
+test <- conversion[test == 1]
+control <- conversion[test == 0 ] # let's remove Spain from control since nothing changed in Spain. 
+#& country != "Spain"
+t.test(x = test$conversion, y = control$conversion)
+```
+<br>
+Mean of x is significantly smaller than mean y implying that conversion of test sample is smaller than that of control sample. Showing that A/B test is negative! This might be because either the test is actually negative. Or:
+1) there is not enough test data. 2)  Maybe test/control are not really random.
+Let's test for 1)
+<br>
+```{r}
+conversion[ , sum(test==1)/(sum(test == 0))]
+```
+Ratio of test to control doesn't look bad. 
+Check randomness of data set (informally by looking at mean and variance)
+```{r, eval = F}
+# convert factors/characters to dummy variables.
+library("dummies")
+conversion.dummy <- dummy.data.frame(conversion) 
+sapply(conversion.dummy[conversion.dummy$test == 0 , ], mean)
+sapply(conversion.dummy[conversion.dummy$test == 1, ], mean)
+sapply(conversion.dummy[conversion.dummy$test == 0 , ], var)
+sapply(conversion.dummy[conversion.dummy$test == 1, ], var)
+# output suppressed
+```
+<br>
+Mean and variance for non-country observations are similar - looks good. Mean values for some countries don't look same. This implies some countries have different number of observations in test and control. 
+<br>
+```{r rows.print = 6}
+conversion[ ,.N , by = .(country, test)][order(country)]
+```
+<br>
+Argentina for example has vastly different number of observations for test and control. This is reason do a t-test individually for each country. To conduct t-test for each country one would need information of the user's country, so will do an inner join.
+<br>
+
+```{r, rows.print = 4}
+conversion_inner <- merge(test_table, user_table, by = "user_id")
+pvalue <- conversion_inner[ country != "Spain" ,  t.test(x = conversion[test == 1] ,y = conversion[test == 0]),  by = .(country)][ , .(country, p.value, estimate)]
+unique(pvalue, by= "country")
+```
+<br>
+When t-test is carried out for each country, the p-value is not significant for any country. Therefore the A/B test result is not negative as shown previously. 
+
+
+ 

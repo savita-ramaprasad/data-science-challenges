@@ -1,0 +1,197 @@
+---
+title: "Employee Retention"
+header-includes:
+   - \setlength\parindent{24pt}
+   - \usepackage{threeparttable}
+linestretch: 2
+fontsize: 11 pt 
+geometry: margin = 0.5in
+output: html_document	
+---
+<br>
+
+#### Problem Statement: 
+
+We got employee data from a few companies. We have data about all employees who joined from 2011/01/24 to 2015/12/13. For each employee, we also know if they are still at the company as of 2015/12/13 or they have quit. Beside that, we have general info about the employee, such as avg. salary during her tenure, dept, and yrs of experience. 
+As said above, the goal is to predict employee retention and understand its main drivers. Specifically, you should: Assume, for each company, that the headcount starts from zero on 2011/01/23. Estimate employee headcount, for each company, on each day, from 2011/01/24 to 2015/12/13. That is, if by 2012/03/02 2000 people have joined company 1 and 1000 of them have already quit, then company headcount on 2012/03/02 for company 1 would be 1000.   <br>
+- You should create a table with 3 columns: day, employee_headcount, company_id.  <br> 
+- What are the main factors that drive employee churn? Do they make sense? Explain your findings. <br>
+- If you could add to this data set just one variable that could help explain employee churn, what would that be? <br>
+
+#### Solution
+Goal is to understand main drivers of why employees quit. 
+<br>
+Broadly, the steps used to find factors predicting employee retention <br>
+1. Draw insight from a linear model <br>
+2. Visualize <br>
+3. Fit Decision tree <br>
+4. More visuals  <br>
+5. Feature creation <br>
+6. Fit decision tree again and conclude. <br>
+
+```{r}
+library(data.table)
+library(rpart)
+library(rpart.plot)
+
+retention <- fread( "~/Google Drive/take_home_challenge/challenge_3/employee_retention_data.csv")
+retention[ , quit_date := as.Date(quit_date)]
+retention[ , join_date := as.Date(join_date)]
+```
+<br>
+Let's begin by defining binary variable quit and fitting a linear model
+<br>
+
+
+```{r}
+retention$quit <- with(retention, ifelse(!is.na(quit_date), 1, 0))
+lm.quit <- lm(quit ~ salary + factor(company_id) + factor(dept) + seniority, data = retention[quit == 1 | (quit == 0 & join_date < (as.Date("2015-12-13") - 60))])
+summary(lm.quit)
+```
+
+<br>
+1. People with higher salaries are less likely to quit. They might be quite happy with what they are making in the present company they don't feel the need to quit.
+2. The more experience one has had, the more likely they quit. However, seniority may be linked with salary. Exclude seniority of 98, 99 years - doesn't make sense.  Relationship between seniority and salary can be seen in the plot below.
+
+```{r, fig.cap = "Figure: Salary vs seniority"}
+salary_senior <- retention[seniority < 98 , .(mean(salary)), by = seniority ][order(seniority)]
+plot(salary_senior$seniority, salary_senior$V1, xlab = "Seniority", ylab = "Salary")
+```
+
+3. Sale and marketing (and to some extent design) folks quit more compare to customer_service. Again it's possible that the dept is correlated with price. Plot the average salary. customer service earn the least, engineers and data scientist the most. sales and marketing are in the middle range - confirming the correlation, shown in the plot below.  
+
+```{r}
+salary.by.dept <- retention[ , .(mean(salary)), by = dept ]
+barplot(height = salary.by.dept$V1 , names = substr(salary.by.dept$dept, 1,5), xlab = "Department", ylab = "Mean Salary")
+```
+<br>
+Let us fit a tree. Fitting a tree gives us the range of value of the variables for which the probability of quitting is high and for which values of the variable low. This is not true for a linear model, which just gives a single linear trend. In addition, the number of variables that we care about (salary, company id, dept, seniority) are few in number, making analyzing the result of a tree easier. 
+
+```{r}
+retention$quit <- as.factor(retention$quit)
+tree1 <- rpart(quit ~ salary + factor(company_id) + factor(dept) + seniority, data= retention[quit == 1 |  (quit == 0 & join_date < (as.Date("2015-12-13") - 60))])
+rpart.plot(tree1, uniform = TRUE, shadow.col="gray")
+#text(tree1, use.n = TRUE, all = TRUE, cex = 0.8)
+```
+People with salary greater than 246000 are less likely to quit. (which agrees with the linear model) 
+<!--
+Increasing the depth of the tree. 
+
+```{r}
+tree2 <- rpart(quit ~ salary + factor(company_id) + factor(dept) + seniority, data = retention[quit == 1 |  (quit == 0 & join_date < (as.Date("2015-12-13") - 360))], maxdepth = 3, cp = 0.00001)
+rpart.plot(tree2, uniform = TRUE)
+```
+[quit == 1 | (quit == 0 & join_date < (as.Date("2015-12-13") - 60))]
+
+Increasing the depth shows people with good salary (greater than 246000) and people with low salary (< 61500) are less likely to quit. Therefore giving us more information than a linear model. People with lower salaries might want to gain more experience (since they tend to have lower experience) which will help them command a higher salary in future. People with lower salaries may also be getting as many offers from other companies. There is however no outside company information in this data set, so will not be able to explore that. 
+-->
+
+From the two models above, looks like salary is the most important variable. However,the probability values of quitting or not quitting are close to 0.5. This does not give us enough confidence in the result/ split. Salary is not able to split the data into 0, 1 properly. We're looking for a almost virgin distribution at the terminal nodes. Therefore lets look at a different model.  
+
+ We don't have data on the number of years spent in the current company before the employee quit. 
+ 
+```{r}
+retention$days.before.quit <- with(retention, ifelse(!is.na(quit_date), as.Date(quit_date) - as.Date(join_date), as.Date("2015-12-23") - as.Date(join_date) ))
+with(retention[retention$quit == 1], hist(days.before.quit, xlab = "Days before quitting"))
+```
+
+Large number people seem to quit after their first year. Increase the number of breaks
+
+```{r}
+with(retention[retention$quit == 1], hist(days.before.quit, breaks = 100 , xlab = "Days before quitting") )
+```
+
+Another smaller peak at year 2. People quit at year anniversaries. Again typical of employee behavior. People stay to get sign-on bonus and stocks.  
+
+Let us see what drives people to quit within a year/ 13 months of joining. 
+
+```{r}
+retention$early_quit <- with(retention, ifelse( days.before.quit <= 396, 1, 0))
+```
+Consider people who join just before the data collection stops, let's say in June 2015. These guys have a label quit = 0, but may have actually been early quitters. We don't have enough data on them to label them. So exclude non- quitters who join late. 
+Rather keep early quitters and non quitters who join 13 months before data collection end date (2015-12-13) -- early quitters and early joiners.
+
+```{r}
+early_quit_join <- retention[quit == 1 | ( quit == 0 &  join_date < (as.Date("2015-12-13") - (365 + 31)))]
+tree3 <- rpart(as.factor(early_quit) ~ salary + factor(company_id) + factor(dept) + seniority , data = early_quit_join , maxdepth = 2)
+tree3
+```
+<br>
+Since most people in this data set are early quitters - data is already fairly pure. (0.3, 0.6) - no variable has enough information gain after split.  
+<br>
+```{r}
+month_of_year <- as.numeric(format(retention$quit_date, "%m"))
+month_of_year <- month_of_year[!is.na(month_of_year)]
+barplot(table(month_of_year),  xlab = "Month of the year", ylab = "Number of quits")
+```
+<br>
+No striking trend except less quits during December. This might be due to holiday season. There are less number of working days, so less quits.
+<br>
+```{r, eval = TRUE, echo = F}
+comp.growth <- fread("~/Google Drive/take_home_challenge/challenge_3/comp.growth.csv")
+```
+Create factors: 1) Growth of company (% change in employees) when employee joins.
+Calculate head count of employees for each company for each day. Use this to find the growth rate in the company within few months of the employee joining. (I use 2 months - randomly chosen) However one can vary this duration to determine what impacts employee quit probability.
+2) Size of company = headcount of employees when employee joins. 
+ 
+
+```{r, eval = FALSE}
+# udf: head count of employees for a given date for a pair of vector quit date and join date.
+count.date <- function(join_date, quit_date, date){
+	  count1 <- sum(join_date[ is.na(quit_date) ]  <= date) 
+	  count2 <- sum(join_date[ !is.na(quit_date) ]  <= date & quit_date[ !is.na(quit_date)]   > date ) 
+		count1 + count2
+} 
+# given a date returns employee headcount for each company for that date
+get.headcount.list <- function(x){ 
+	
+	retention[ , .(day = x, employee_headcount =  count.date(join_date, quit_date, x)), by = .(company_id)]
+	 
+	}
+seq.date <- seq(as.Date("2011-01-24"), as.Date("2015-12-13") , by = "day")
+start = Sys.time()
+# headcount has the hc for each companies for each date.
+headcount <- rbindlist(lapply(seq.date, get.headcount.list)) 
+
+growth <- function(id, join){
+		hc_60 = headcount[company_id == id  & day == join + 60, employee_headcount  ]
+		hc <- headcount[company_id == id  & day == join, employee_headcount  ]
+		(hc_60 - hc)/hc
+}
+size_company <- function(id, join){
+		headcount[company_id == id & day == join, employee_headcount ]
+	}
+
+growth <- retention[join_date < (as.Date("2015-12-13") - 60) , .(growth_comp = mapply(growth ,company_id, join_date))]
+comp.growth <- retention[join_date < (as.Date("2015-12-13") - 60)]
+comp.growth$growth <- growth$growth_comp
+```
+```{r}
+tree5 <- rpart(quit ~ salary + growth + factor(company_id) + factor(dept) + seniority, data = comp.growth, maxdepth = 3, cp = 0.0001)
+rpart.plot(tree5)
+```
+<br>
+Fast growing companies probably have competitive employees who have great opportunities outside of the company and therefore more likely to quit. Therefore employees in faster growing companies (>0.054) and employees in middle growth and not very high (< 262000) salaries quit. Employees in medium growth companies with very high salaries quit less. And employees in low growth companies quit less - since the company may be in a stable position. 
+
+<br>
+```{r, eval = FALSE}
+size <- retention[ join_date < (as.Date("2015-12-13") - 60), .(size = mapply(size_company, company_id , join_date))]
+comp.growth$size <- size$size 
+```
+```{r}
+tree5 <- rpart(quit ~ salary + size + factor(company_id) + factor(dept) + seniority, data = comp.growth, maxdepth = 2, cp = 0.0001)
+rpart.plot(tree5)
+```
+<br>
+People from large companies (> 3800) quit more (better offers), people from small companies (< 374) quit more (in search of better opportunities). Medium sized companies' employees stay! 
+
+
+```{r}
+tree6 <- rpart(quit ~ salary + growth + size + factor(company_id) + factor(dept) + seniority, data = comp.growth, maxdepth = 3, cp = 0.0001)
+rpart.plot(tree6)
+```
+<br>
+When including all three: salary, growth and size, looks like size is not so important. Salary and growth of company during the time employee joins are important. The conclusion remains same as above. Employees in slow growing companies (the company may be in a stable position) and employees in middle growth companies who earn crazy high salaries (these employees are happy where they are) quit less. The remaining quit more (this group is more likely to be provided with better opportunity). However, it is important to not that the data does not contain information on many factors that determine employee retention such as number of job offers received, salary offered by other companies etc. Having this data will improve predictive power of model.  
+
+
+

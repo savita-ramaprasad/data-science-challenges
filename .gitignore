@@ -31,3 +31,16 @@ vignettes/*.pdf
 # Temporary files created by R markdown
 *.utf8.md
 *.knit.md
+
+# Emacs temporary files
+*~
+
+# Data files
+*.csv
+
+# Mac files
+Icon?
+.DS_Store
+
+# html files
+*.html

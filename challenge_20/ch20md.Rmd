@@ -1,0 +1,150 @@
+---
+title: "Ads Analysis"
+header-includes:
+   - \setlength\parindent{24pt}
+   - \usepackage{threeparttable}
+linestretch: 2
+fontsize: 11 pt 
+geometry: margin = 0.5in
+output: 
+    html_document:
+        df_print: paged	
+---
+<br>
+
+#### Problem Statement:
+
+Company XYZ is a food delivery company. Like pretty much any other site, in order to get customers, they have been relying significantly on online ads, such as those you see on Google or Facebook. 
+At the moment, they are running 40 different ad campaigns and want you to help them understand their performance. 
+Specifically, you are asked to:  <br>
+- If you had to identify the 5 best ad groups, which ones would they be? Which metric did you choose to identify the best ad groups? Why? Explain the pros of your metric as well as the possible cons.  
+- For each group, predict how many ads will be shown on Dec, 15 (assume each ad group keeps following its trend).   
+- Cluster ads into 3 groups: the ones whose avg_cost_per_click is going up, the ones whose avg_cost_per_click is flat and the ones whose avg_cost_per_click is going down.  
+
+
+<br>
+
+#### Solution
+##### 1) Which ad groups are doing the best? 
+
+```{r, eval = T}
+library(data.table)
+library(tseries)
+ad_table <- fread("~/Google Drive/take_home_challenge/challenge_20/ad_table.csv")
+
+```
+<br>
+I want to maximize the probability that people click AND convert as well as the profit on conversion and minimize the cost of clicks. 
+Which is basically, clicks/shown x convert/clicks x (total revenue - avg_cost_per_clicks x clicks)
+Therefore metric is conversion rate x profit per conversion. 
+<br>
+
+```{r, eval = T , rows.print = 6 }
+# create profit column
+
+ad_table$profit <- with(ad_table, total_revenue - clicked*avg_cost_per_click)
+
+ad_table$profit_per_click <- with(ad_table, profit/clicked)
+
+# want to maximize conversion rate and profit per click. 
+
+ad_table$prob_convert <- with(ad_table, converted/shown)
+ad_table$metric <- with(ad_table, prob_convert*profit_per_click)
+
+ad_table[ , .(mean_metric = mean(metric, na.rm = T)) , by = ad][order(mean_metric)]
+```
+<br>
+5 best ad groups based on this metric would be ad_group 27, 31, 14, 16 and 2. 
+<br>
+
+##### 2) How many ads will be shown on Dec 15, assuming present trend continues? 
+
+A number of stationarity tests are available, one of the most popular ones is the Augmented dickey fuller test. A negative coefficient and pvalue < 0.05 indicates original series is stationary. A coefficient value of zero indicates original series needs first differencing. I normalize the series and calculated first difference to see if the first differenced series is stationary. 
+
+```{r, eval = T, warning = F, rows.print = 6}
+normal <- function(x) { #x <- x[x != 0]
+	(x - mean(x, na.rm = T))/sd(x, na.rm = T) }
+
+first_diff <- function(x){ y <- c(x[-1], NA) - x
+	y[!is.na(y)] }
+
+ad_table[shown != 0 , adf.test(first_diff(normal(shown)) , alternative = "stationary"), by = ad ][, .(ad, statistic, p.value)]
+```
+I do the Augmented Dickey Fuller test for first difference of the series. ADF test shows that all except the 19th ad group is stationary after first differencing. Plotting the first differenced series for the 19th ad group.
+
+```{r, eval = T, message = FALSE , results = 'hide'}
+
+plot_series <- function(z) { 
+	x = 1:length(z[z!=0]) 
+	plot(x = x, y = (z[z!=0]), typ = "l")
+	#lines(predict(loess(z[z != 0] ~ x )), col = "green" ) 
+}
+par(mfrow = c(2,2), mar = c(1,3,1,3))
+ad_table[shown!= 0 & ad == "ad_group_19", plot_series(first_diff(shown))]
+ad_table[shown!= 0 & ad == "ad_group_19", plot_series(first_diff(shown[c(10:length(shown))]) )]
+
+```
+<br>
+Looks like there might be an outlier around the 9th observation (first plot). plotting from 10th obs after gives second plot - looks fairly stationary. 
+<br>
+```{r, eval = T, rows.print = 6} 
+# adf. test of the first diff of the shown data of 9th ad group is now stationary. 
+
+ad_table[shown!= 0 & ad == "ad_group_19", adf.test(first_diff(shown[c(10:length(shown))]) , alternative = "stationary") ]
+```
+
+Since the differenced series is stationary, original series, $y_{t} = y_{t-1} + e_{t}$ which is also known as random walk.  
+Therefore the expected number of ads that will be shown on "Dec 15" date is ads shown on last day for that group. 
+
+```{r, eval = T, rows.print = 6}
+ ad_table[ ,  .( predicted_shown = tail(shown, 1)) , by = ad ]
+ ```
+<br>  
+
+##### 3) Categorizing the ad groups based on a linear trend of avg cost.
+
+<br>
+```{r, eval = T, rows.print = 6}
+#categorizing the ad groups based on a linear trend of avg cost.
+slope <- function(z) { mz = mean(z, na.rm = T)
+		x = 1:length(z[z!=0]) 
+		y = z/mz 
+	inc = round(coef(lm(y[z != 0] ~ x + x*x))[2], 3)  
+	if (inc > 0) return("inc")
+	if (inc == 0) return("flat")
+	if (inc < 0) return("dec")
+	}
+ad_table[ ,  slope(avg_cost_per_click) , by = ad ]
+
+```
+```{r, eval = F, echo = F}
+#pdf("~/Desktop/av.pdf", onefile = T)
+# for(i in c(1: 40)) {	
+# ad = paste0("ad_group_", i)
+#print(ad)
+# }
+#dev.off()
+```
+<br>
+Visualizing the same by plotting moving average and trend line for ad_group 1, 2 and 8 which have increasing, flat and decreasing avg cost trends.  
+<br>
+```{r, eval = T}
+ma <- function(x, n = 5) {filter(x, rep(1/n, n), sides = 1 )}
+plot_tr <- function(z) { 
+	
+	plot(x = 1: length(z), y = z, typ = "l")
+	lines(x = 1: length(z), y =  ma(z), typ = "l", col = "red" ) 
+	x = 1:length(z[z!=0]) 
+	lines(predict(lm(z[z != 0] ~ x  )), col = "blue" ) 
+}
+```
+```{r, eval = T, message = F, warning = F, echo = F, results = "hide"}
+par(mfrow = c(1,3), mar = c(9,1,9,1))
+ad_table[ad == "ad_group_1"  , plot_tr( avg_cost_per_click)]
+ad_table[ad == "ad_group_2"  , plot_tr( avg_cost_per_click)]
+ad_table[ad == "ad_group_8"  , plot_tr( avg_cost_per_click)]
+#ad_table[ad == "ad_group_4"  , plot_tr( avg_cost_per_click)]
+
+```
+
+
